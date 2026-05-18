@@ -1,0 +1,142 @@
+"""Parity tests: legacy hippylib vs ported hippylibX must produce equivalent
+numerical results on the same deterministic problem, for each supported
+time-dependent physics (heat, tumor, ...).
+
+Each runner is invoked in a fresh subprocess inside its own conda env, so the
+two FEniCS stacks never coexist in the same process.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+THIS_DIR = Path(__file__).parent
+
+CONDA_SH = os.environ.get("CONDA_SH", "/opt/anaconda3/etc/profile.d/conda.sh")
+HIPPYLIBX_BASE_DIR = os.environ.get(
+    "HIPPYLIBX_BASE_DIR", "/Users/dliu/scratch/visco_inversion/src/hippylibx"
+)
+HIPPYLIB_PATH = os.environ.get(
+    "HIPPYLIB_PATH", "/Users/dliu/scratch/visco_inversion/src/hippylib"
+)
+
+PROBLEMS = ["heat", "tumor"]
+
+
+def _run(env_name: str, runner: str, problem: str, out_json: Path) -> dict:
+    cmd = (
+        f"source {CONDA_SH} && conda activate {env_name} && "
+        f"HIPPYLIBX_BASE_DIR={HIPPYLIBX_BASE_DIR} "
+        f"HIPPYLIB_PATH={HIPPYLIB_PATH} "
+        f"PROBLEM={problem} "
+        f"RESULTS_JSON={out_json} python3 {THIS_DIR / runner}"
+    )
+    print(f"\n[parity] {problem}: running {runner} in env {env_name}")
+    res = subprocess.run(
+        ["bash", "-c", cmd],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"{runner} ({problem}) failed (exit {res.returncode}):\n"
+            f"--stdout--\n{res.stdout}\n--stderr--\n{res.stderr}"
+        )
+    return json.loads(out_json.read_text())
+
+
+_RESULTS: dict[tuple[str, str], dict] = {}
+
+
+def _get(stack: str, problem: str) -> dict:
+    key = (stack, problem)
+    if key in _RESULTS:
+        return _RESULTS[key]
+    if stack == "x":
+        env_name = "fenicsx"
+        runner = "run_x.py"
+    elif stack == "legacy":
+        env_name = "fenicsproject"
+        runner = "run_legacy.py"
+    else:
+        raise ValueError(stack)
+    out_json = THIS_DIR / f"results_{stack}_{problem}.json"
+    _RESULTS[key] = _run(env_name, runner, problem, out_json)
+    return _RESULTS[key]
+
+
+@pytest.fixture(scope="module", params=PROBLEMS)
+def both(request):
+    problem = request.param
+    return problem, _get("x", problem), _get("legacy", problem)
+
+
+# ----- Tests --------------------------------------------------------------
+
+
+def test_ndofs_match(both):
+    problem, x, leg = both
+    assert x["ndofs_state"] == leg["ndofs_state"], f"[{problem}] state DOFs differ"
+    assert x["ndofs_param"] == leg["ndofs_param"], f"[{problem}] param DOFs differ"
+
+
+def test_state_norms_at_mtrue(both):
+    problem, x, leg = both
+    a = x["state_norms_at_mtrue"]
+    b = leg["state_norms_at_mtrue"]
+    assert len(a) == len(b)
+    for i, (xn, ln) in enumerate(zip(a, b)):
+        rel = abs(xn - ln) / max(abs(ln), 1e-30)
+        assert rel < 1e-6, f"[{problem}] step {i}: x={xn} legacy={ln} (rel={rel})"
+
+
+def test_cost_at_m0(both):
+    problem, x, leg = both
+    for i, name in enumerate(("total", "reg", "misfit")):
+        a, b = x["cost_at_m0"][i], leg["cost_at_m0"][i]
+        rel = abs(a - b) / max(abs(b), 1e-30)
+        assert rel < 1e-6, f"[{problem}] cost@m0[{name}] x={a} legacy={b} (rel={rel})"
+
+
+def test_cost_at_mtrue(both):
+    problem, x, leg = both
+    for i, name in enumerate(("total", "reg", "misfit")):
+        a, b = x["cost_at_mtrue"][i], leg["cost_at_mtrue"][i]
+        rel = abs(a - b) / max(abs(b), 1e-30)
+        assert rel < 1e-6, f"[{problem}] cost@m_true[{name}] x={a} legacy={b} (rel={rel})"
+
+
+def test_newton_converges_in_same_iters(both):
+    problem, x, leg = both
+    assert x["converged"], f"[{problem}] X did not converge"
+    assert leg["converged"], f"[{problem}] legacy did not converge"
+    assert abs(x["newton_iters"] - leg["newton_iters"]) <= 1, (
+        f"[{problem}] iters: x={x['newton_iters']} legacy={leg['newton_iters']}"
+    )
+
+
+def test_final_cost_match(both):
+    problem, x, leg = both
+    a, b = x["final_cost"], leg["final_cost"]
+    rel = abs(a - b) / max(abs(b), 1e-30)
+    assert rel < 1e-4, f"[{problem}] final cost x={a} vs legacy={b} (rel={rel})"
+
+
+def test_map_state_norms(both):
+    problem, x, leg = both
+    for i, (a, b) in enumerate(zip(x["map_state_norms"], leg["map_state_norms"])):
+        rel = abs(a - b) / max(abs(b), 1e-30)
+        assert rel < 1e-4, f"[{problem}] MAP state ‖·‖ step {i}: x={a} legacy={b} (rel={rel})"
+
+
+def test_map_param_norm(both):
+    problem, x, leg = both
+    a, b = x["m_map_l2"], leg["m_map_l2"]
+    rel = abs(a - b) / max(abs(b), 1e-30)
+    assert rel < 1e-4, f"[{problem}] ||m_MAP||: x={a} legacy={b} (rel={rel})"
