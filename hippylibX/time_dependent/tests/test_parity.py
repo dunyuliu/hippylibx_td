@@ -1,3 +1,12 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Parity tests: legacy hippylib vs ported hippylibX must produce equivalent
 numerical results on the same deterministic problem, for each supported
 time-dependent physics (heat, tumor, ...).
@@ -18,11 +27,43 @@ import pytest
 THIS_DIR = Path(__file__).parent
 
 CONDA_SH = os.environ.get("CONDA_SH", "/opt/anaconda3/etc/profile.d/conda.sh")
-HIPPYLIBX_BASE_DIR = os.environ.get(
-    "HIPPYLIBX_BASE_DIR", "/Users/dliu/scratch/visco_inversion/src/hippylibx"
-)
-HIPPYLIB_PATH = os.environ.get(
-    "HIPPYLIB_PATH", "/Users/dliu/scratch/visco_inversion/src/hippylib"
+HIPPYLIBX_BASE_DIR = os.environ.get("HIPPYLIBX_BASE_DIR", "")
+HIPPYLIB_PATH = os.environ.get("HIPPYLIB_PATH", "")
+
+# Both conda envs must exist (one runs the port, one runs legacy).
+# We skip the parity suite gracefully on machines that only have one.
+FENICSX_ENV = os.environ.get("FENICSX_ENV", "fenicsx")
+LEGACY_ENV = os.environ.get("FENICSPROJECT_ENV", "fenicsproject")
+
+
+def _conda_envs_available() -> tuple[bool, str]:
+    """Return (ok, reason). ok=False means the parity suite should skip."""
+    if not os.path.exists(CONDA_SH):
+        return False, f"conda init not found at {CONDA_SH}"
+    res = subprocess.run(
+        ["bash", "-c", f"source {CONDA_SH} && conda env list"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if res.returncode != 0:
+        return False, f"`conda env list` failed: {res.stderr.strip()}"
+    envs = res.stdout
+    missing = [e for e in (FENICSX_ENV, LEGACY_ENV) if e not in envs]
+    if missing:
+        return False, f"missing conda env(s): {missing}"
+    # Legacy hippylib must be importable from HIPPYLIB_PATH (env var, no
+    # hardcoded fallback). The path is added to sys.path by run_legacy.py.
+    if not HIPPYLIB_PATH:
+        return False, "HIPPYLIB_PATH env var not set (path to a hippylib checkout)"
+    if not os.path.isdir(os.path.join(HIPPYLIB_PATH, "hippylib")):
+        return False, f"HIPPYLIB_PATH={HIPPYLIB_PATH!r} doesn't look like a hippylib checkout"
+    return True, ""
+
+
+pytestmark = pytest.mark.skipif(
+    not _conda_envs_available()[0],
+    reason=_conda_envs_available()[1] or "parity envs unavailable",
 )
 
 PROBLEMS = ["heat", "tumor", "ad_diff"]

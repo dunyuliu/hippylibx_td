@@ -1,23 +1,37 @@
 # --------------------------------------------------------------------------bc-
-# Time-dependent extension for hippylibX.
+# Copyright (C) 2026 The University of Texas at Austin
 #
-# Faithful port of the legacy hippylib time-dependent classes
-# (TimeDependentVector, TimeDependentPDEVariationalProblem, MisfitTD,
-# ContinuousStateObservation) onto dolfinx.
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
 #
-# Usage:
-#     import hippylibX as hpx
-#     from hippylibX.time_dependent import (
-#         TimeDependentVector,
-#         TimeDependentPDEVariationalProblem,
-#         MisfitTD,
-#         ContinuousStateObservation,
-#     )
-#
-# The upstream `hpx.Model`, `hpx.ReducedHessian`, and `hpx.modelVerify`
-# work directly on `TimeDependentVector` state/adjoint variables via the
-# in-place `.array[:]` proxy on TDV — no model-level shims required.
+# SPDX-License-Identifier: GPL-2.0-only
 # --------------------------------------------------------------------------ec-
+
+"""Time-dependent extension for hippylibX.
+
+Faithful port of the legacy hippylib time-dependent classes
+(:class:`TimeDependentVector`, :class:`TimeDependentPDEVariationalProblem`,
+:class:`MisfitTD`, :class:`ContinuousStateObservation`,
+:class:`SpaceTimePointwiseStateObservation`) onto dolfinx, plus the
+standalone :class:`AdvectionDiffusionICModel` for initial-condition
+inversion problems.
+
+Usage::
+
+    import hippylibX as hpx
+    from hippylibX.time_dependent import (
+        TimeDependentVector,
+        TimeDependentPDEVariationalProblem,
+        MisfitTD,
+        ContinuousStateObservation,
+        SpaceTimePointwiseStateObservation,
+    )
+
+The upstream :class:`hippylibX.Model`, :class:`hippylibX.ReducedHessian`,
+and :func:`hippylibX.modelVerify` work directly on
+:class:`TimeDependentVector` state/adjoint variables via the in-place
+``.array[:]`` proxy on TDV — no model-level shims required.
+"""
 
 from .timeDependentVector import TimeDependentVector  # noqa
 from .TimeDependentPDEVariationalProblem import (  # noqa
@@ -28,4 +42,4 @@ from .misfit import (  # noqa
     ContinuousStateObservation,
     SpaceTimePointwiseStateObservation,
 )
-from .ad_diff_problem import AdvectionDiffusionICModel  # noqa
+from .applications.ad_diff import AdvectionDiffusionICModel  # noqa

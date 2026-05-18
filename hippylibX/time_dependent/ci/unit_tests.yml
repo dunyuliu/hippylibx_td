@@ -1,0 +1,38 @@
+# GitHub Actions workflow snippet for the `hippylibX.time_dependent`
+# unit tests. Copy or `uses:`-include this from a workflow under
+# `.github/workflows/` at the repo root when wiring it into CI.
+#
+# This deliberately skips the parity tests (which require legacy hippylib
+# in a sibling conda env). The parity suite has its own auto-skip path
+# triggered by missing `HIPPYLIB_PATH`/`fenicsproject` env.
+name: hippylibX.time_dependent unit tests
+
+on:
+  push:
+    paths:
+      - "hippylibX/time_dependent/**"
+      - ".github/workflows/td_unit.yml"
+  pull_request:
+    paths:
+      - "hippylibX/time_dependent/**"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    container:
+      image: dolfinx/dolfinx:v0.10.0   # pinned to match runtime expectations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run unit tests (skip parity — no legacy env)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -q \
+            hippylibX/time_dependent/tests/test_tdv.py \
+            hippylibX/time_dependent/tests/test_misfit_td.py \
+            hippylibX/time_dependent/tests/test_pde_td.py \
+            hippylibX/time_dependent/tests/test_kkt_blocks.py

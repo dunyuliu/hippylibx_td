@@ -1,8 +1,18 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Time-dependent PDE variational problem for hippylibX (dolfinx).
 
-Faithful port of hippylib's `TimeDependentPDEVariationalProblem`.
-The varf handler must implement ``__call__(u, u_old, m, p, t) -> ufl.Form``
-and expose attribute ``dt`` (timestep).
+Faithful port of hippylib's :class:`TimeDependentPDEVariationalProblem`.
+The varf handler must implement
+``__call__(u, u_old, m, p, t) -> ufl.Form`` and expose attribute ``dt``
+(timestep).
 """
 
 from __future__ import annotations
@@ -17,11 +27,6 @@ from petsc4py import PETSc
 from ..modeling.variables import STATE, PARAMETER, ADJOINT
 
 from .timeDependentVector import TimeDependentVector
-
-
-def _zero_vec(v: dlx.la.Vector) -> None:
-    v.array[:] = 0.0
-    v.scatter_forward()
 
 
 class TimeDependentPDEVariationalProblem:
@@ -75,6 +80,17 @@ class TimeDependentPDEVariationalProblem:
         }
 
     # ---- factories -----------------------------------------------------
+    def __del__(self):
+        # Destroy any KSPs we created. Mirrors the pattern in
+        # hippylibX.modeling.PDEProblem.PDEVariationalProblem.__del__.
+        for attr in ("solverA", "solverAadj", "solver_fwd_inc", "solver_adj_inc"):
+            ksp = getattr(self, attr, None)
+            if ksp is not None:
+                try:
+                    ksp.destroy()
+                except Exception:
+                    pass
+
     def generate_state(self) -> TimeDependentVector:
         u = TimeDependentVector(self.times)
         u.initialize(self.Vh[STATE])
@@ -382,7 +398,17 @@ class TimeDependentPDEVariationalProblem:
         times_rev = list(reversed(self.times[1:]))
         for idx, t in enumerate(times_rev):
             self.linearize_x[STATE].retrieve(u.x, t)
-            # u_old at time t corresponds to the previous frame in physical time
+            # u_old at time t corresponds to the previous frame in physical
+            # time. NB: this is a deliberate deviation from the legacy
+            # hippylib implementation, which used `self.times[it-1]` where
+            # `it` is the reversed-loop enumerator — on the first reverse
+            # step (it=0) that wraps to `self.times[-1]` (a future time),
+            # which is incorrect. The fix is silent because for backward-
+            # Euler with a mass-coupling u_old term, the only place u_old
+            # appears in this form is in `dF/du_old`, which is identically
+            # `-1/dt * M` — independent of u_old's value. So legacy got the
+            # right answer for the wrong reason. We retrieve the correct
+            # u_old so the form evaluates consistently.
             t_prev = self.times[0] if t == self.times[1] else self.times[
                 list(self.times).index(t) - 1
             ]

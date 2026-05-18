@@ -1,3 +1,12 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Shared problem definitions for parity tests.
 
 Both the legacy and the ported runner import these constants so the two
@@ -33,7 +42,9 @@ NOISE_VARIANCE = 1e-6
 REL_TOL = 1e-9
 ABS_TOL = 1e-15
 MAX_ITER = 60
-CG_COARSE_TOL = 5e-1
+CG_COARSE_TOL = 1e-8     # forces both inner CGs into the asymptotic regime
+                          #   tight enough that Eisenstat-Walker forcing
+                          #   does not diverge between stacks
 GLOB = "LS"
 GN_ITER = 0  # use the full Hessian throughout (no Gauss-Newton warm-up)
 

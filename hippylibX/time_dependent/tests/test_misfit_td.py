@@ -1,3 +1,12 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Unit tests for `ContinuousStateObservation` and `MisfitTD` (fenicsx env)."""
 
 from __future__ import annotations

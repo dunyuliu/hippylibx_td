@@ -1,3 +1,12 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Unit tests for `TimeDependentVector`. Run only inside the `fenicsx` env."""
 
 from __future__ import annotations
@@ -139,5 +148,5 @@ def test_array_proxy_arithmetic(Vh, times):
 def test_index_out_of_frame_raises(Vh, times):
     tdv = _new_tdv(Vh, times)
     u = dlx.fem.Function(Vh)
-    with pytest.raises(AssertionError):
+    with pytest.raises(KeyError):
         tdv.store(u.x, 0.42)  # not in frames

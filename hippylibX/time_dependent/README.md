@@ -59,6 +59,46 @@ x = hpx.ReducedSpaceNewtonCG(model, params).solve(x)
 
 See `examples/heat.py` for a full worked tutorial.
 
+## Install (this subpackage)
+
+Two conda envs are needed if you want to run the full test suite (unit
++ parity vs legacy hippylib). Only the first is needed for normal use.
+
+### `fenicsx` — required (port runtime + unit tests)
+
+```bash
+conda create -n fenicsx -c conda-forge \
+    fenics-dolfinx=0.10 mpich petsc=*=*complex* python=3.12 \
+    matplotlib numpy pytest
+conda activate fenicsx
+# clone the hippylibX fork (this repo)
+cd <path>/hippylibx_td
+# the subpackage is importable as long as the repo root is on PYTHONPATH
+export PYTHONPATH=$PWD:$PYTHONPATH
+```
+
+### `fenicsproject` — optional (for parity tests only)
+
+```bash
+conda create -n fenicsproject -c conda-forge fenics=2019.1 python=3.13 \
+    matplotlib numpy pytest
+conda activate fenicsproject
+# clone legacy hippylib
+git clone https://github.com/hippylib/hippylib.git $HOME/hippylib
+export HIPPYLIB_PATH=$HOME/hippylib
+```
+
+Then, from `fenicsx`:
+
+```bash
+conda activate fenicsx
+export HIPPYLIB_PATH=$HOME/hippylib    # legacy checkout
+pytest -q hippylibX/time_dependent/tests/
+```
+
+If `HIPPYLIB_PATH` is unset or the `fenicsproject` env is missing, the
+parity tests skip cleanly; unit tests still run.
+
 ## Tests
 
 ```bash
@@ -68,7 +108,15 @@ pytest -q hippylibX/time_dependent/tests/
 
 `test_parity.py` additionally invokes legacy `hippylib` + dolfin in a
 sibling conda env (`fenicsproject`) to check numerical equivalence on a
-deterministic problem.
+deterministic problem. The parity tests auto-skip if either env or the
+`HIPPYLIB_PATH` env var is unavailable.
+
+### Continuous integration
+
+A minimal GitHub Actions snippet for the unit subset is provided at
+`ci/unit_tests.yml` in this directory. It is **not** wired into the
+repo-root `.github/workflows/` — copy or include it from there when you
+want CI on this subpackage.
 
 ## Credits
 

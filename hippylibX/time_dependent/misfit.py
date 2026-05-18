@@ -1,8 +1,19 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Time-dependent misfit components.
 
-`ContinuousStateObservation` — single-time L^2(X) misfit (mass-matrix based,
-mirrors the legacy hippylib class).
-`MisfitTD` — time-summed wrapper over per-time misfits.
+- :class:`ContinuousStateObservation` — single-time L²(X) misfit
+  (mass-matrix based, mirrors the legacy hippylib class).
+- :class:`SpaceTimePointwiseStateObservation` — pointwise sensors at a list
+  of observation times.
+- :class:`MisfitTD` — time-summed wrapper over per-time misfits.
 """
 
 from __future__ import annotations
@@ -58,6 +69,13 @@ class ContinuousStateObservation:
             self.d = data
 
         self.noise_variance = noise_variance
+
+    def __del__(self):
+        if getattr(self, "W", None) is not None:
+            try:
+                self.W.destroy()
+            except Exception:
+                pass
 
     def _check_nv(self):
         if self.noise_variance is None:
@@ -137,6 +155,20 @@ class SpaceTimePointwiseStateObservation:
 
         # scratch
         self._Bu = self.B.createVecLeft()
+
+    def __del__(self):
+        for attr in ("B", "_Bu"):
+            v = getattr(self, attr, None)
+            if v is not None:
+                try:
+                    v.destroy()
+                except Exception:
+                    pass
+        for v in getattr(self, "_d_petsc", []) or []:
+            try:
+                v.destroy()
+            except Exception:
+                pass
 
     def _check_nv(self):
         if self.noise_variance is None:

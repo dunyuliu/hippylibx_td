@@ -1,4 +1,14 @@
-#!/usr/bin/env python
+
+
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Run a parity test problem with legacy dolfin + hippylib.
 
 Selects the problem via the ``PROBLEM`` env var (default ``heat``).
@@ -15,10 +25,9 @@ import numpy as np
 import dolfin as dl
 import ufl
 
-sys.path.append(os.environ.get(
-    "HIPPYLIB_PATH",
-    "/Users/dliu/scratch/visco_inversion/src/hippylib",
-))
+_HIPPYLIB_PATH = os.environ.get("HIPPYLIB_PATH", "").strip()
+if _HIPPYLIB_PATH:
+    sys.path.insert(0, _HIPPYLIB_PATH)
 import hippylib as hp
 
 from refproblem import (
@@ -164,13 +173,18 @@ def setup_ad_diff():
     # Import the application module (it defines `SpaceTimePointwiseStateObservation`
     # and `TimeDependentAD` as local classes, not in the hp top-level namespace).
     import importlib.util
-    legacy_ad_path = os.environ.get(
-        "HIPPYLIB_AD_PATH",
-        os.path.join(os.environ.get(
-            "HIPPYLIB_PATH",
-            "/Users/dliu/scratch/visco_inversion/src/hippylib",
-        ), "applications", "ad_diff", "model_ad_diff.py"),
-    )
+    hippylib_path = os.environ.get("HIPPYLIB_PATH", "").strip()
+    legacy_ad_path = os.environ.get("HIPPYLIB_AD_PATH", "").strip()
+    if not legacy_ad_path:
+        if not hippylib_path:
+            raise RuntimeError(
+                "AD parity needs either HIPPYLIB_AD_PATH or HIPPYLIB_PATH "
+                "set to a hippylib checkout that contains "
+                "`applications/ad_diff/model_ad_diff.py`."
+            )
+        legacy_ad_path = os.path.join(
+            hippylib_path, "applications", "ad_diff", "model_ad_diff.py"
+        )
     spec = importlib.util.spec_from_file_location("legacy_ad_diff", legacy_ad_path)
     legacy_ad = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(legacy_ad)

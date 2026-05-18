@@ -1,13 +1,44 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Time-dependent vector for hippylibX (dolfinx).
 
-Faithful port of hippylib's `TimeDependentVector`. Stores one
-`dolfinx.la.Vector` snapshot per time frame, keyed by absolute time.
+Faithful port of hippylib's :class:`TimeDependentVector`. Stores one
+:class:`dolfinx.la.Vector` snapshot per time frame, keyed by absolute time.
+
+Architectural note — the ``.array[:]`` proxy
+--------------------------------------------
+:class:`TimeDependentVector` exposes a :class:`_TDVArrayProxy` via the
+``.array`` property. The proxy implements ``__setitem__`` for the full-
+slice form ``a[:] = …`` so that the upstream :class:`hippylibX.Model`,
+:class:`hippylibX.ReducedHessian`, and :func:`hippylibX.modelVerify` can
+operate on time-dependent state/adjoint vectors **without modification**.
+
+In particular, the upstream code paths
+``out.array[:] *= -1.0``, ``out.array[:] += tmp.array``, and
+``out.array[:] = src.array`` all dispatch correctly per snapshot when
+``out`` is a :class:`TimeDependentVector`. This is what allowed the
+TD port to drop the early `ModelTD` / `ReducedHessianTD` / `modelVerifyTD`
+shims that an earlier version of this code carried.
+
+Reads via the proxy return a *copy* (concatenation), so arithmetic such as
+``a.array + 0.5 * b.array`` yields a plain :class:`numpy.ndarray`.
+Writes via ``__setitem__`` propagate back to the underlying snapshots.
+Partial-slice assignment (``a[i:j] = …``) is deliberately unsupported and
+raises :class:`NotImplementedError`.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import dolfinx as dlx
+import petsc4py
 
 
 class _TDVArrayProxy:
@@ -38,7 +69,11 @@ class _TDVArrayProxy:
                 "Only full-slice assignment array[:] = ... is supported on a TDV"
             )
         if isinstance(value, _TDVArrayProxy):
-            assert value.tdv.nsteps == self.tdv.nsteps
+            if value.tdv.nsteps != self.tdv.nsteps:
+                raise ValueError(
+                    f"nsteps mismatch on assignment: "
+                    f"dst={self.tdv.nsteps} src={value.tdv.nsteps}"
+                )
             for i in range(self.tdv.nsteps):
                 self.tdv.data[i].array[:] = value.tdv.data[i].array[:]
                 self.tdv.data[i].scatter_forward()
@@ -117,9 +152,11 @@ class TimeDependentVector:
         i = 0
         while i < self.nsteps - 1 and 2 * t > self.times[i] + self.times[i + 1]:
             i += 1
-        assert abs(t - self.times[i]) < self.tol, (
-            f"Time {t} not in time frames (closest {self.times[i]})"
-        )
+        if abs(t - self.times[i]) >= self.tol:
+            raise KeyError(
+                f"Time {t!r} not in time frames "
+                f"(closest {self.times[i]!r}, tol={self.tol})"
+            )
         return i
 
     # ---- snapshot ops --------------------------------------------------
@@ -167,13 +204,19 @@ class TimeDependentVector:
         return self
 
     def axpy(self, a: float, other: "TimeDependentVector") -> None:
-        assert other.nsteps == self.nsteps
+        if other.nsteps != self.nsteps:
+            raise ValueError(
+                f"nsteps mismatch: self={self.nsteps} other={other.nsteps}"
+            )
         for i in range(self.nsteps):
             self.data[i].array[:] += a * other.data[i].array[:]
             self.data[i].scatter_forward()
 
     def inner(self, other: "TimeDependentVector") -> float:
-        assert other.nsteps == self.nsteps
+        if other.nsteps != self.nsteps:
+            raise ValueError(
+                f"nsteps mismatch: self={self.nsteps} other={other.nsteps}"
+            )
         s = 0.0
         for i in range(self.nsteps):
             s += float(self.data[i].petsc_vec.dot(other.data[i].petsc_vec))
@@ -181,8 +224,10 @@ class TimeDependentVector:
 
     def norm(self, time_norm: str, space_norm: str) -> float:
         """Space-time norm. Currently only ``time_norm == 'linf'`` is supported."""
-        assert time_norm == "linf"
-        import petsc4py
+        if time_norm != "linf":
+            raise NotImplementedError(
+                f"time_norm={time_norm!r}: only 'linf' is supported"
+            )
 
         if space_norm == "linf":
             ptype = petsc4py.PETSc.NormType.NORM_INFINITY

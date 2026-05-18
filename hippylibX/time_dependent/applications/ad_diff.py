@@ -1,3 +1,12 @@
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Advection-Diffusion with initial-condition inversion.
 
 Faithful port of legacy hippylib's `TimeDependentAD` (applications/ad_diff/
@@ -13,15 +22,14 @@ PARAMETER and STATE function spaces must be identical, since u^0 = m.
 
 from __future__ import annotations
 
-import math
 import numpy as np
 import ufl
 import dolfinx as dlx
 import dolfinx.fem.petsc
 from petsc4py import PETSc
 
-from ..modeling.variables import STATE, PARAMETER, ADJOINT
-from .timeDependentVector import TimeDependentVector
+from ...modeling.variables import STATE, PARAMETER, ADJOINT
+from ..timeDependentVector import TimeDependentVector
 
 
 class AdvectionDiffusionICModel:
@@ -58,11 +66,19 @@ class AdvectionDiffusionICModel:
         dt_const = dlx.fem.Constant(msh, dlx.default_scalar_type(self.dt))
         zero_const = dlx.fem.Constant(msh, dlx.default_scalar_type(0.0))
 
-        # GLS stabilization parameter tau
+        # GLS stabilization parameter tau (Hughes-Tezduyar style).
+        # NOTE: `h/vnorm` is undefined at wind-stagnation points where
+        # `|wind| = 0`. A small floor `eps_v` is added to the norm to avoid
+        # a divide-by-zero on such cells without changing the answer where
+        # the wind is non-degenerate.
         h = ufl.CellDiameter(msh)
-        vnorm = ufl.sqrt(ufl.inner(self.wind, self.wind))
+        eps_v = dlx.fem.Constant(msh, dlx.default_scalar_type(1e-30))
+        vnorm = ufl.sqrt(ufl.inner(self.wind, self.wind) + eps_v)
         if gls_stab:
-            tau = ufl.min_value(h * h / (dlx.fem.Constant(msh, dlx.default_scalar_type(2.0)) * kappa_const), h / vnorm)
+            tau = ufl.min_value(
+                h * h / (dlx.fem.Constant(msh, dlx.default_scalar_type(2.0)) * kappa_const),
+                h / vnorm,
+            )
         else:
             tau = zero_const
 
@@ -113,6 +129,18 @@ class AdvectionDiffusionICModel:
         self.n_adj_solve = 0
         self.n_inc_solve = 0
 
+    def __del__(self):
+        for attr in (
+            "M", "M_stab", "Mt_stab", "L", "Lt",
+            "solver", "solvert",
+        ):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    obj.destroy()
+                except Exception:
+                    pass
+
     @staticmethod
     def _make_lu(A: PETSc.Mat) -> PETSc.KSP:
         ksp = PETSc.KSP().create(A.getComm())
@@ -122,8 +150,14 @@ class AdvectionDiffusionICModel:
         pc.setType("lu")
         try:
             pc.setFactorSolverType("mumps")
-        except Exception:
-            pass
+        except Exception as exc:
+            import warnings
+            warnings.warn(
+                f"MUMPS not available for LU factorization "
+                f"({type(exc).__name__}: {exc}); falling back to PETSc default.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         ksp.setFromOptions()
         return ksp
 

@@ -1,4 +1,14 @@
-#!/usr/bin/env python
+
+
+# --------------------------------------------------------------------------bc-
+# Copyright (C) 2026 The University of Texas at Austin
+#
+# This file is part of the hIPPYlibx library. For more information and source
+# code availability see https://hippylib.github.io.
+#
+# SPDX-License-Identifier: GPL-2.0-only
+# --------------------------------------------------------------------------ec-
+
 """Run a parity test problem with fenicsx + hippylibX (+ time_dependent).
 
 Selects the problem via the ``PROBLEM`` env var (default ``heat``).
@@ -280,20 +290,15 @@ def main(out_path: str, problem: str) -> None:
         msh, Vh, bc, pde, m_true, prior, misfit_kind = setup_tumor()
     elif problem == "ad_diff":
         msh, Vh, ad_model, m_true, prior, misfit_kind, sim_times = setup_ad_diff()
-        # Forward at m_true (state norm includes t=0 since IC is the parameter)
         u_true = ad_model.generate_vector(STATE)
         ad_model.solveFwd(u_true, [u_true, m_true, None])
         state_norms = [float(u_true.view(t).petsc_vec.norm()) for t in sim_times]
         times = sim_times
         model = ad_model
-        # cost at m_true
         x_true_eval = [u_true, m_true, model.generate_vector(ADJOINT)]
         model.solveAdj(x_true_eval[ADJOINT], x_true_eval)
         cost_at_mtrue = model.cost(x_true_eval)
-        # cost at m=0
-        m0 = prior.generate_parameter(0)
-        m0.array[:] = 0.0
-        m0.scatter_forward()
+        m0 = prior.generate_parameter(0); m0.array[:] = 0.0; m0.scatter_forward()
         u0 = model.generate_vector(STATE)
         model.solveFwd(u0, [u0, m0, None])
         x0 = [u0, m0, model.generate_vector(ADJOINT)]
