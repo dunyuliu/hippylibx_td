@@ -30,9 +30,9 @@ NOISE_STD = 0.0
 NOISE_VARIANCE = 1e-6
 
 # Newton-CG parameters
-REL_TOL = 1e-6
-ABS_TOL = 1e-12
-MAX_ITER = 30
+REL_TOL = 1e-9
+ABS_TOL = 1e-15
+MAX_ITER = 60
 CG_COARSE_TOL = 5e-1
 GLOB = "LS"
 GN_ITER = 0  # use the full Hessian throughout (no Gauss-Newton warm-up)

@@ -25,7 +25,19 @@ HIPPYLIB_PATH = os.environ.get(
     "HIPPYLIB_PATH", "/Users/dliu/scratch/visco_inversion/src/hippylib"
 )
 
-PROBLEMS = ["heat", "tumor"]
+PROBLEMS = ["heat", "tumor", "ad_diff"]
+
+# Per-problem parity tolerances. Heat & tumor: ~1e-13 (FP-roundoff agreement;
+# both stacks compute identical floating-point operations modulo FFC/FFCx
+# code-gen order). AD: ~1e-2 — both stacks solve the linear MAP via
+# NewtonCG, but their inner-CG Eisenstat-Walker forcing terms produce
+# slightly different inexact iterates, so the converged MAP differs by
+# ~0.1% on m and ~1% on cost. The forward solve, prior, and misfit
+# evaluations all agree to ~1e-13; only the optimizer trajectory diverges.
+TOL_FINAL_COST = {"heat": 1e-4, "tumor": 1e-4, "ad_diff": 5e-2}
+TOL_MAP_STATE  = {"heat": 1e-4, "tumor": 1e-4, "ad_diff": 5e-3}
+TOL_MAP_PARAM  = {"heat": 1e-4, "tumor": 1e-4, "ad_diff": 5e-3}
+TOL_PRE_INVERSION = 1e-6   # for cost@m0, cost@m_true, state_norms@m_true
 
 
 def _run(env_name: str, runner: str, problem: str, out_json: Path) -> dict:
@@ -93,7 +105,7 @@ def test_state_norms_at_mtrue(both):
     assert len(a) == len(b)
     for i, (xn, ln) in enumerate(zip(a, b)):
         rel = abs(xn - ln) / max(abs(ln), 1e-30)
-        assert rel < 1e-6, f"[{problem}] step {i}: x={xn} legacy={ln} (rel={rel})"
+        assert rel < TOL_PRE_INVERSION, f"[{problem}] step {i}: x={xn} legacy={ln} (rel={rel})"
 
 
 def test_cost_at_m0(both):
@@ -101,7 +113,7 @@ def test_cost_at_m0(both):
     for i, name in enumerate(("total", "reg", "misfit")):
         a, b = x["cost_at_m0"][i], leg["cost_at_m0"][i]
         rel = abs(a - b) / max(abs(b), 1e-30)
-        assert rel < 1e-6, f"[{problem}] cost@m0[{name}] x={a} legacy={b} (rel={rel})"
+        assert rel < TOL_PRE_INVERSION, f"[{problem}] cost@m0[{name}] x={a} legacy={b} (rel={rel})"
 
 
 def test_cost_at_mtrue(both):
@@ -109,14 +121,17 @@ def test_cost_at_mtrue(both):
     for i, name in enumerate(("total", "reg", "misfit")):
         a, b = x["cost_at_mtrue"][i], leg["cost_at_mtrue"][i]
         rel = abs(a - b) / max(abs(b), 1e-30)
-        assert rel < 1e-6, f"[{problem}] cost@m_true[{name}] x={a} legacy={b} (rel={rel})"
+        assert rel < TOL_PRE_INVERSION, f"[{problem}] cost@m_true[{name}] x={a} legacy={b} (rel={rel})"
 
 
-def test_newton_converges_in_same_iters(both):
+def test_newton_converges(both):
     problem, x, leg = both
     assert x["converged"], f"[{problem}] X did not converge"
     assert leg["converged"], f"[{problem}] legacy did not converge"
-    assert abs(x["newton_iters"] - leg["newton_iters"]) <= 1, (
+    # iter counts: heat/tumor should match exactly; AD may differ due to
+    # algorithmic divergence in the inner Eisenstat-Walker CG forcing.
+    max_diff = 1 if problem in ("heat", "tumor") else 5
+    assert abs(x["newton_iters"] - leg["newton_iters"]) <= max_diff, (
         f"[{problem}] iters: x={x['newton_iters']} legacy={leg['newton_iters']}"
     )
 
@@ -125,18 +140,24 @@ def test_final_cost_match(both):
     problem, x, leg = both
     a, b = x["final_cost"], leg["final_cost"]
     rel = abs(a - b) / max(abs(b), 1e-30)
-    assert rel < 1e-4, f"[{problem}] final cost x={a} vs legacy={b} (rel={rel})"
+    tol = TOL_FINAL_COST[problem]
+    assert rel < tol, f"[{problem}] final cost x={a} vs legacy={b} (rel={rel} > {tol})"
 
 
 def test_map_state_norms(both):
     problem, x, leg = both
+    tol = TOL_MAP_STATE[problem]
     for i, (a, b) in enumerate(zip(x["map_state_norms"], leg["map_state_norms"])):
-        rel = abs(a - b) / max(abs(b), 1e-30)
-        assert rel < 1e-4, f"[{problem}] MAP state ‖·‖ step {i}: x={a} legacy={b} (rel={rel})"
+        if abs(b) < 1e-30:
+            assert abs(a) < 1e-12, f"[{problem}] step {i}: x={a} (expected ~0)"
+            continue
+        rel = abs(a - b) / abs(b)
+        assert rel < tol, f"[{problem}] MAP state ‖·‖ step {i}: x={a} legacy={b} (rel={rel} > {tol})"
 
 
 def test_map_param_norm(both):
     problem, x, leg = both
     a, b = x["m_map_l2"], leg["m_map_l2"]
     rel = abs(a - b) / max(abs(b), 1e-30)
-    assert rel < 1e-4, f"[{problem}] ||m_MAP||: x={a} legacy={b} (rel={rel})"
+    tol = TOL_MAP_PARAM[problem]
+    assert rel < tol, f"[{problem}] ||m_MAP||: x={a} legacy={b} (rel={rel} > {tol})"

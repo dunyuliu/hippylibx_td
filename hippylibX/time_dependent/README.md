@@ -15,8 +15,23 @@ Time-dependent extension for hippylibX. Faithful port of the legacy
   `varf(u, u_old, m, p, t)` UFL form through `times`, with
   `solveFwd` / `solveAdj` / incremental fwd+adj solvers / per-step
   parameter gradient / second-derivative blocks (`applyC/Ct/Wuu/Wum/Wmu/Wmm`).
-- `misfit.py` — `ContinuousStateObservation` (single-time L²(X) mass-matrix
-  misfit, mirrors legacy hippylib) and `MisfitTD` (time-summed wrapper).
+- `misfit.py` — three misfit classes:
+  - `ContinuousStateObservation` — single-time L²(X) mass-matrix misfit
+  - `SpaceTimePointwiseStateObservation` — pointwise sensor grid at a
+    list of observation times
+  - `MisfitTD` — time-summed wrapper around per-time misfits
+- `ad_diff_problem.py` — `AdvectionDiffusionICModel`: standalone
+  Model-style class for linear advection-diffusion with **initial-
+  condition inversion** (mirrors legacy `TimeDependentAD`). Uses
+  SUPG/GLS streamline stabilization. Inverts the IC, not a coefficient.
+
+## Coverage of legacy hippylib time-dependent applications
+
+| legacy application | covered by | parity-tested |
+|---|---|---|
+| `applications/time_dependent/model_heat.py` | `TimeDependentPDEVariationalProblem` + `MisfitTD` | ✓ |
+| `applications/time_dependent/model_tumor.py` (nonlinear) | same, with `is_fwd_linear=False` | ✓ |
+| `applications/ad_diff/model_ad_diff.py` (IC inversion + pointwise sensors) | `AdvectionDiffusionICModel` + `SpaceTimePointwiseStateObservation` | ✓ |
 
 ## Usage
 

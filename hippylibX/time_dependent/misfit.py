@@ -7,11 +7,13 @@ mirrors the legacy hippylib class).
 
 from __future__ import annotations
 
+import numpy as np
 import ufl
 import dolfinx as dlx
 import dolfinx.fem.petsc
 
 from ..modeling.variables import STATE, PARAMETER
+from ..modeling.pointwiseInterpolationMatrix import pointwiseInterpolationMatrix
 from .timeDependentVector import TimeDependentVector
 
 
@@ -99,6 +101,117 @@ class ContinuousStateObservation:
             out.petsc_vec.scale(1.0 / self.noise_variance)
         else:
             out.array[:] = 0.0
+
+
+class SpaceTimePointwiseStateObservation:
+    """Space-time pointwise misfit.
+
+    Observes the state at a fixed list of sensor coordinates at each of the
+    ``observation_times`` and compares against time-keyed data ``d`` with
+    Gaussian noise of variance ``noise_variance``.
+
+    Misfit:
+        ``1/(2*sigma^2) * sum_t || B u(t) - d(t) ||^2``
+
+    where ``B`` is the pointwise interpolation matrix mapping a state in
+    ``Vh`` to its values at the sensor coordinates.
+
+    Mirrors hippylib's `SpaceTimePointwiseStateObservation`.
+    """
+
+    def __init__(self, Vh, observation_times, targets, d=None, noise_variance=None):
+        self.Vh = Vh
+        self.observation_times = list(observation_times)
+        # targets: (ntargets, ndim) array of sensor coordinates
+        self.targets = np.asarray(targets, dtype=np.float64)
+        self.B = pointwiseInterpolationMatrix(Vh, self.targets)
+
+        if d is None:
+            # build a TDV-like storage compatible with B (row-side)
+            self._d_petsc = [self.B.createVecLeft() for _ in self.observation_times]
+            self.d = _PointwiseTDStorage(self._d_petsc, self.observation_times)
+        else:
+            self.d = d
+
+        self.noise_variance = noise_variance
+
+        # scratch
+        self._Bu = self.B.createVecLeft()
+
+    def _check_nv(self):
+        if self.noise_variance is None:
+            raise ValueError("Noise Variance must be specified")
+        if self.noise_variance == 0:
+            raise ZeroDivisionError(
+                "Noise Variance must not be 0.0 (set 1.0 for deterministic problems)"
+            )
+
+    def cost(self, x: list) -> float:
+        self._check_nv()
+        c = 0.0
+        for t in self.observation_times:
+            u_t = x[STATE].view(t)
+            self.B.mult(u_t.petsc_vec, self._Bu)
+            self._Bu.axpy(-1.0, self.d.view(t))
+            c += float(self._Bu.dot(self._Bu))
+        return c / (2.0 * self.noise_variance)
+
+    def grad(self, i: int, x: list, out) -> None:
+        self._check_nv()
+        if i == STATE:
+            out.zero()
+            for t in self.observation_times:
+                u_t = x[STATE].view(t)
+                self.B.mult(u_t.petsc_vec, self._Bu)
+                self._Bu.axpy(-1.0, self.d.view(t))
+                self._Bu.scale(1.0 / self.noise_variance)
+                self.B.multTranspose(self._Bu, out.view(t).petsc_vec)
+                out.view(t).scatter_forward()
+        elif i == PARAMETER:
+            out.array[:] = 0.0
+        else:
+            raise IndexError(i)
+
+    def setLinearizationPoint(self, x, gauss_newton_approx=False) -> None:
+        return
+
+    def apply_ij(self, i: int, j: int, direction, out) -> None:
+        self._check_nv()
+        if i == STATE and j == STATE:
+            out.zero()
+            for t in self.observation_times:
+                self.B.mult(direction.view(t).petsc_vec, self._Bu)
+                self._Bu.scale(1.0 / self.noise_variance)
+                self.B.multTranspose(self._Bu, out.view(t).petsc_vec)
+                out.view(t).scatter_forward()
+        else:
+            if hasattr(out, "zero"):
+                out.zero()
+            else:
+                out.array[:] = 0.0
+
+
+class _PointwiseTDStorage:
+    """Minimal TDV-like wrapper around per-time PETSc.Vec snapshots living
+    in B's row space (sensor space, not the FE state space). Only supports
+    ``view(t)``."""
+
+    def __init__(self, vecs, times, tol=1e-10):
+        self._vecs = list(vecs)
+        self._times = list(times)
+        self.tol = tol
+
+    def _index(self, t):
+        for i, ti in enumerate(self._times):
+            if abs(ti - t) < self.tol:
+                return i
+        raise KeyError(f"Time {t} not in {self._times}")
+
+    def view(self, t):
+        return self._vecs[self._index(t)]
+
+    def set(self, t, vec):
+        self._vecs[self._index(t)].axpby(1.0, 0.0, vec)
 
 
 class MisfitTD:

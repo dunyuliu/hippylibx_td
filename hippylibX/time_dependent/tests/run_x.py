@@ -150,6 +150,72 @@ def setup_tumor():
 
 
 # ---------------------------------------------------------------------------
+# Advection-Diffusion (linear, IC inversion)
+# ---------------------------------------------------------------------------
+def setup_ad_diff():
+    """Returns an `ad_model` object that acts as the Model directly (it owns
+    prior + misfit), rather than the (pde, prior, misfit) tuple.
+    Sentinel kind == "ad_model"."""
+    msh, Vh, _bc = _mesh_and_spaces(state_param_same_space=True)
+
+    # Constant wind (deterministic across stacks). Use a 2-component
+    # ufl.as_vector so legacy can match exactly.
+    wind = ufl.as_vector([
+        dlx.fem.Constant(msh, dlx.default_scalar_type(1.0)),
+        dlx.fem.Constant(msh, dlx.default_scalar_type(0.5)),
+    ])
+
+    n_obs_times = NT + 1
+    simulation_times = np.linspace(T_INIT, T_FINAL, n_obs_times)
+
+    # Sensor grid — fixed coordinates (NX_SENS × NY_SENS)
+    xs = np.linspace(0.15, 0.85, AD_DIFF_N_SENS_X)
+    ys = np.linspace(0.15, 0.85, AD_DIFF_N_SENS_Y)
+    X, Y = np.meshgrid(xs, ys, indexing="xy")
+    Z = np.zeros_like(X)
+    targets = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
+
+    # IC = m_true: localised Gaussian bump
+    m_true_fun = dlx.fem.Function(Vh[PARAMETER])
+    m_true_fun.interpolate(lambda x: AD_DIFF_M_AMP * np.exp(
+        -((x[0] - AD_DIFF_M_CX) ** 2 + (x[1] - AD_DIFF_M_CY) ** 2)
+        / (2.0 * AD_DIFF_M_SIGMA ** 2)
+    ))
+    m_true_fun.x.scatter_forward()
+    m_true = m_true_fun.x
+
+    prior_mean = dlx.fem.Function(Vh[PARAMETER])
+    prior_mean.x.array[:] = 0.0
+    prior = hpx.BiLaplacianPrior(
+        Vh[PARAMETER], GAMMA, DELTA, mean=prior_mean.x, robin_bc=ROBIN_BC,
+    )
+
+    # Build misfit AFTER we have the model so we can compute u_true.
+    # observation_times = simulation_times[1:] to skip t=0 (matching legacy AD).
+    observation_times = simulation_times[1:]
+    misfit = td.SpaceTimePointwiseStateObservation(
+        Vh[STATE], list(observation_times), targets,
+    )
+    misfit.noise_variance = NOISE_VARIANCE
+
+    ad_model = td.AdvectionDiffusionICModel(
+        Vh, prior, misfit, simulation_times, wind, kappa=1e-3, gls_stab=True,
+    )
+
+    # Generate u_true by forward solve at m_true
+    u_true = ad_model.generate_vector(STATE)
+    ad_model.solveFwd(u_true, [u_true, m_true, None])
+
+    # Set d = B * u_true at each observation time
+    for t in misfit.observation_times:
+        ut = u_true.view(t)
+        misfit.B.mult(ut.petsc_vec, misfit._Bu)  # noqa: SLF001
+        misfit.d.set(t, misfit._Bu)
+
+    return msh, Vh, ad_model, m_true, prior, "ad_model", simulation_times
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 def _build_misfit_continuous(Vh, bc, u_true, pde, with_bc: bool):
@@ -165,11 +231,76 @@ def _build_misfit_continuous(Vh, bc, u_true, pde, with_bc: bool):
     return td.MisfitTD(misfits, pde.times)
 
 
+def _run_newton_and_dump(
+    out_path, problem, Vh, times, state_norms, cost_at_mtrue, cost_at_m0,
+    model, m0,
+):
+    """Common Newton-CG + dump step. Works for both `hpx.Model` instances
+    and the AD model (same Model interface)."""
+    x = [model.generate_vector(STATE), m0, model.generate_vector(ADJOINT)]
+    p = hpx.ReducedSpaceNewtonCG_ParameterList()
+    p["rel_tolerance"] = REL_TOL
+    p["abs_tolerance"] = ABS_TOL
+    p["max_iter"] = MAX_ITER
+    p["cg_coarse_tolerance"] = CG_COARSE_TOL
+    p["globalization"] = GLOB
+    p["GN_iter"] = GN_ITER
+    p["print_level"] = -1
+    solver = hpx.ReducedSpaceNewtonCG(model, p)
+    x = solver.solve(x)
+
+    map_state_norms = [float(x[STATE].view(t).petsc_vec.norm()) for t in times]
+    m_map_l2 = float(x[PARAMETER].petsc_vec.norm())
+
+    out = {
+        "problem": problem,
+        "ndofs_state": int(Vh[STATE].dofmap.index_map.size_global * Vh[STATE].dofmap.index_map_bs),
+        "ndofs_param": int(Vh[PARAMETER].dofmap.index_map.size_global * Vh[PARAMETER].dofmap.index_map_bs),
+        "times": [float(t) for t in times],
+        "state_norms_at_mtrue": state_norms,
+        "cost_at_mtrue": [float(c) for c in cost_at_mtrue],
+        "cost_at_m0": [float(c) for c in cost_at_m0],
+        "newton_iters": int(solver.it),
+        "final_cost": float(solver.final_cost),
+        "final_grad_norm": float(solver.final_grad_norm),
+        "converged": bool(solver.converged),
+        "termination": solver.termination_reasons[solver.reason],
+        "map_state_norms": map_state_norms,
+        "m_map_l2": m_map_l2,
+    }
+    with open(out_path, "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"Wrote {out_path}")
+
+
 def main(out_path: str, problem: str) -> None:
     if problem == "heat":
         msh, Vh, bc, pde, m_true, prior, misfit_kind = setup_heat()
     elif problem == "tumor":
         msh, Vh, bc, pde, m_true, prior, misfit_kind = setup_tumor()
+    elif problem == "ad_diff":
+        msh, Vh, ad_model, m_true, prior, misfit_kind, sim_times = setup_ad_diff()
+        # Forward at m_true (state norm includes t=0 since IC is the parameter)
+        u_true = ad_model.generate_vector(STATE)
+        ad_model.solveFwd(u_true, [u_true, m_true, None])
+        state_norms = [float(u_true.view(t).petsc_vec.norm()) for t in sim_times]
+        times = sim_times
+        model = ad_model
+        # cost at m_true
+        x_true_eval = [u_true, m_true, model.generate_vector(ADJOINT)]
+        model.solveAdj(x_true_eval[ADJOINT], x_true_eval)
+        cost_at_mtrue = model.cost(x_true_eval)
+        # cost at m=0
+        m0 = prior.generate_parameter(0)
+        m0.array[:] = 0.0
+        m0.scatter_forward()
+        u0 = model.generate_vector(STATE)
+        model.solveFwd(u0, [u0, m0, None])
+        x0 = [u0, m0, model.generate_vector(ADJOINT)]
+        cost_at_m0 = model.cost(x0)
+        _run_newton_and_dump(out_path, problem, Vh, times, state_norms,
+                             cost_at_mtrue, cost_at_m0, model, m0)
+        return
     else:
         raise ValueError(f"unknown PROBLEM: {problem}")
 

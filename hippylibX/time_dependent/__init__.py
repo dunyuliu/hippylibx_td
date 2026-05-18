@@ -23,4 +23,9 @@ from .timeDependentVector import TimeDependentVector  # noqa
 from .TimeDependentPDEVariationalProblem import (  # noqa
     TimeDependentPDEVariationalProblem,
 )
-from .misfit import MisfitTD, ContinuousStateObservation  # noqa
+from .misfit import (  # noqa
+    MisfitTD,
+    ContinuousStateObservation,
+    SpaceTimePointwiseStateObservation,
+)
+from .ad_diff_problem import AdvectionDiffusionICModel  # noqa
