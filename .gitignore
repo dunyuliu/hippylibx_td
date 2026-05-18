@@ -168,6 +168,8 @@ jitfailure-*
 # example/test result artifacts
 hippylibX/time_dependent/tests/results_*.json
 hippylibX/time_dependent/examples/results/
+hippylibX/total_variation/tests/results_*.json
+hippylibX/total_variation/examples/results/
 *.xdmf
 *.h5
 *.bp/
