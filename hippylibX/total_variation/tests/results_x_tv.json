@@ -1,0 +1,18 @@
+{
+  "problem": "tv_denoise",
+  "ndofs_param": 169,
+  "cost_at_m0": [
+    0.06339493146972065,
+    0.0,
+    0.00031622776601683946,
+    0.06307870370370382
+  ],
+  "newton_iters": 14,
+  "total_cg_iter": 42,
+  "converged": true,
+  "termination": "Norm of the gradient less than tolerance",
+  "final_cost": 0.01406697111087183,
+  "final_grad_norm": 6.077459279469856e-08,
+  "m_map_l2": 4.001723676924402,
+  "err_to_true": 0.7423852453989725
+}
