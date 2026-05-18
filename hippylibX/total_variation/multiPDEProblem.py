@@ -20,7 +20,7 @@ shared across all instances.
 
 from __future__ import annotations
 
-from ..modeling.variables import STATE, PARAMETER, ADJOINT
+from ._variables import STATE, PARAMETER, ADJOINT
 from .blockVector import BlockVector
 
 

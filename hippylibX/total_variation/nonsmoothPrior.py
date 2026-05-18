@@ -33,7 +33,7 @@ import petsc4py
 from petsc4py import PETSc
 from mpi4py import MPI
 
-from ..utils.vector2function import vector2Function
+from ._vector2function import vector2Function
 
 
 def _make_lu(A: PETSc.Mat) -> PETSc.KSP:

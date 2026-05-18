@@ -19,7 +19,7 @@ from __future__ import annotations
 import petsc4py
 from petsc4py import PETSc
 
-from ..modeling.variables import STATE, PARAMETER, ADJOINT
+from ._variables import STATE, PARAMETER, ADJOINT
 
 
 class NSReducedHessian:

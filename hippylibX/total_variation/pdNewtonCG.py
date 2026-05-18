@@ -27,10 +27,10 @@ import math
 import petsc4py
 from petsc4py import PETSc
 
-from ..algorithms.cgsolverSteihaug import (
+from ._cgsolverSteihaug import (
     CGSolverSteihaug, CGSolverSteihaug_ParameterList,
 )
-from ..modeling.variables import STATE, PARAMETER, ADJOINT
+from ._variables import STATE, PARAMETER, ADJOINT
 from . import SLACK
 from .nsReducedHessian import NSReducedHessian
 

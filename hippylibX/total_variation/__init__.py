@@ -33,9 +33,11 @@ implementation goes to Xindi Gong. Any defects in the dolfinx port are
 the maintainers' responsibility.
 """
 
-# variable index for the slack variable in non-smooth (TV) inverse problems
-SLACK = 3
-NVAR_NS = 4
+# variable indices (vendored from ._variables so this subpackage has zero
+# imports from upstream `hippylibX.modeling`).
+from ._variables import STATE, PARAMETER, ADJOINT, SLACK, NVAR  # noqa
+
+NVAR_NS = NVAR  # kept as a friendly alias
 
 from .blockVector import BlockVector  # noqa
 from .multiPDEProblem import MultiPDEProblem  # noqa

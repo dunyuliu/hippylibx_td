@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from typing import List
 
-from ..modeling.variables import STATE, PARAMETER, ADJOINT
+from ._variables import STATE, PARAMETER, ADJOINT
 from . import SLACK
 
 
