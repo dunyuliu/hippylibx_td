@@ -40,4 +40,10 @@ NVAR_NS = 4
 from .blockVector import BlockVector  # noqa
 from .multiPDEProblem import MultiPDEProblem  # noqa
 from .nonsmoothPrior import TVPrior, weightedVTVPrior  # noqa
-# remaining classes wired in as they land
+from .nonsmoothModel import ModelNS  # noqa
+from .nsReducedHessian import NSReducedHessian  # noqa
+from .pdNewtonCG import (  # noqa
+    ReducedSpacePDNewtonCG,
+    ReducedSpacePDNewtonCG_ParameterList,
+    LS_ParameterList,
+)
