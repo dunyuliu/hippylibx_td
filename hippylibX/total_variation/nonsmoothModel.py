@@ -10,7 +10,7 @@
 """Model class for non-smooth (TV-regularized) inverse problems.
 
 Faithful dolfinx port of the legacy hippylib class authored by
-**Xindi Gong** (see ``hippylib/modeling/nonsmoothModel.py`` in
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/modeling/nonsmoothModel.py`` in
 ``xindigong/hippylib:tv-enhanced``).
 
 Wraps a PDE problem, a smooth prior (e.g. BiLaplacian), a non-smooth

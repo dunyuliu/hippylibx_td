@@ -10,9 +10,15 @@
 """Total Variation prior + primal-dual optimization for hippylibX (dolfinx).
 
 This subpackage is a faithful port of the Total Variation (TV) work
-originally developed by **Xindi Gong** in the legacy `hippylib` fork at
+hosted on the legacy `hippylib` fork at
 
     https://github.com/xindigong/hippylib/tree/tv-enhanced
+
+The TV-specific files (`nonsmoothPrior.py`, `nonsmoothModel.py`,
+`blockVector.py`, `multiPDEProblem.py`, `PDNewtonCG.py`,
+`applications/total_variation/image_denoising/tv_image.py`) on that
+branch were authored primarily by **Graham Pash**, with additional
+commits to `PDNewtonCG.py` by **Xindi Gong**, who hosts the branch.
 
 The legacy implementation lives across:
     hippylib/modeling/nonsmoothPrior.py     -> :class:`TVPrior`
@@ -29,8 +35,8 @@ Mathematical references:
         SIAM J. Sci. Comput. 20.6 (1999): 1964-1977.
 
 All credit for the algorithmic design, derivations, and reference
-implementation goes to Xindi Gong. Any defects in the dolfinx port are
-the maintainers' responsibility.
+implementation goes to Graham Pash and Xindi Gong. Any defects in the
+dolfinx port are the maintainers' responsibility.
 """
 
 # variable indices (vendored from ._variables so this subpackage has zero

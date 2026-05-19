@@ -10,7 +10,7 @@
 """Primal-Dual Newton-CG solver for TV-regularized inverse problems.
 
 Faithful dolfinx port of the legacy hippylib class authored by
-**Xindi Gong** (see ``hippylib/algorithms/PDNewtonCG.py`` in
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/algorithms/PDNewtonCG.py`` in
 ``xindigong/hippylib:tv-enhanced``).
 
 References:

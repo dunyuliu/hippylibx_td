@@ -10,7 +10,7 @@
 """Block vector for primal-dual optimization with TV priors.
 
 Faithful dolfinx port of the legacy hippylib class authored by
-**Xindi Gong** (see ``hippylib/modeling/blockVector.py`` in
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/modeling/blockVector.py`` in
 ``xindigong/hippylib:tv-enhanced``).
 """
 

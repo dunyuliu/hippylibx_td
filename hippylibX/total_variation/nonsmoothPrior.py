@@ -10,7 +10,7 @@
 """Total Variation prior (primal-dual formulation) for hippylibX (dolfinx).
 
 Faithful dolfinx port of the legacy hippylib classes authored by
-**Xindi Gong** (see ``hippylib/modeling/nonsmoothPrior.py`` in
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/modeling/nonsmoothPrior.py`` in
 ``xindigong/hippylib:tv-enhanced``).
 
 References:

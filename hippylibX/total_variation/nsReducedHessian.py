@@ -10,7 +10,7 @@
 """Reduced Hessian aware of the non-smooth (TV) regularization term.
 
 Faithful dolfinx port of the legacy hippylib class authored by
-**Xindi Gong** (see ``hippylib/modeling/reducedHessian.py:NSReducedHessian``
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/modeling/reducedHessian.py:NSReducedHessian``
 in ``xindigong/hippylib:tv-enhanced``).
 """
 

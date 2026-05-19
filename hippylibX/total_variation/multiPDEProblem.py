@@ -10,7 +10,7 @@
 """MultiPDEProblem — N independent forward problems sharing a parameter.
 
 Faithful dolfinx port of the legacy hippylib class authored by
-**Xindi Gong** (see ``hippylib/modeling/multiPDEProblem.py`` in
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong** — see ``hippylib/modeling/multiPDEProblem.py`` in
 ``xindigong/hippylib:tv-enhanced``).
 
 State, adjoint, and incremental quantities are stored as

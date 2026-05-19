@@ -10,7 +10,7 @@
 """Image denoising via Total Variation regularization.
 
 Faithful dolfinx port of the legacy example originally authored by
-**Xindi Gong** at
+**Graham Pash** (primary implementer; hosted on the fork of **Xindi Gong**) at
 ``applications/total_variation/image_denoising/tv_image.py`` in
 ``xindigong/hippylib:tv-enhanced``.
 
