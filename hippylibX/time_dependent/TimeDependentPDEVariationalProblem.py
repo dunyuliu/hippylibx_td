@@ -64,6 +64,25 @@ class TimeDependentPDEVariationalProblem:
         self.solver_fwd_inc = None
         self.solver_adj_inc = None
 
+        # Persistent system matrices, one per solve type.  These are allocated
+        # once (first timestep of the first solve) and re-assembled in place on
+        # every subsequent timestep/Newton-iter.  Reusing the SAME PETSc Mat
+        # object keeps PETSc/MUMPS from creating a brand-new factor (and dup'ing
+        # a new MPI communicator) each timestep — the leak that exhausted the
+        # 2048-context MPI pool and aborted every np>1 run.  Bonus: MUMPS reuses
+        # its symbolic factorization (same nonzero pattern), so np=1 is faster.
+        self._A_fwd = None
+        self._A_adj = None
+        self._A_finc = None
+        self._A_ainc = None
+        # Persistent RHS vectors, mirroring the matrices.  A fresh ghosted PETSc
+        # Vec is what DOLFINx builds a neighbourhood communicator for, so
+        # creating one per timestep is the second half of the np>1 comm leak.
+        self._b_fwd = None
+        self._b_adj = None
+        self._b_finc = None
+        self._b_ainc = None
+
         self.is_fwd_linear = is_fwd_linear
 
         self.petsc_options = {
@@ -90,6 +109,51 @@ class TimeDependentPDEVariationalProblem:
                     ksp.destroy()
                 except Exception:
                     pass
+        for attr in ("_A_fwd", "_A_adj", "_A_finc", "_A_ainc",
+                     "_b_fwd", "_b_adj", "_b_finc", "_b_ainc"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    obj.destroy()
+                except Exception:
+                    pass
+
+    # ---- matrix reuse --------------------------------------------------
+    def _assemble_reuse(self, A, A_form, bcs, ksp):
+        """Assemble ``A_form`` into a persistent matrix and return it.
+
+        On the first call (``A is None``) a new matrix is created, assembled,
+        and bound to ``ksp`` via setOperators.  On every later call the existing
+        matrix is zeroed and re-assembled IN PLACE, so the same PETSc Mat object
+        (and its MUMPS factor / MPI communicator) is reused — no per-timestep
+        communicator dup.  The nonzero pattern is identical across timesteps
+        (same function space + form structure), so in-place assembly is valid
+        and MUMPS reuses its symbolic factorization.
+        """
+        if A is None:
+            A = dolfinx.fem.petsc.assemble_matrix(A_form, bcs=bcs)
+            A.assemble()
+            ksp.setOperators(A)
+        else:
+            A.zeroEntries()
+            dolfinx.fem.petsc.assemble_matrix(A, A_form, bcs=bcs)
+            A.assemble()
+        return A
+
+    def _assemble_vec_reuse(self, b, b_form):
+        """Assemble ``b_form`` into a persistent RHS vector and return it.
+
+        First call creates the ghosted vector; later calls zero it and
+        re-assemble IN PLACE, reusing the same PETSc Vec (and its cached
+        neighbourhood communicator) so no new comm is dup'd per timestep.
+        """
+        if b is None:
+            b = dolfinx.fem.petsc.assemble_vector(b_form)
+        else:
+            with b.localForm() as loc:
+                loc.set(0.0)
+            dolfinx.fem.petsc.assemble_vector(b, b_form)
+        return b
 
     def generate_state(self) -> TimeDependentVector:
         u = TimeDependentVector(self.times)
@@ -158,25 +222,23 @@ class TimeDependentPDEVariationalProblem:
                 A_form = dlx.fem.form(ufl.lhs(res_form))
                 b_form = dlx.fem.form(ufl.rhs(res_form))
 
-                A = dolfinx.fem.petsc.assemble_matrix(A_form, bcs=self.fwd_bc)
-                A.assemble()
-                b = dolfinx.fem.petsc.assemble_vector(b_form)
+                self._A_fwd = self._assemble_reuse(
+                    self._A_fwd, A_form, self.fwd_bc, self.solverA
+                )
+                self._b_fwd = self._assemble_vec_reuse(self._b_fwd, b_form)
+                b = self._b_fwd
                 dolfinx.fem.petsc.apply_lifting(b, [A_form], [self.fwd_bc])
                 b.ghostUpdate(
                     PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE
                 )
                 dolfinx.fem.petsc.set_bc(b, self.fwd_bc)
 
-                self.solverA.setOperators(A)
                 self.solverA.solve(b, u_vec.petsc_vec)
                 u_vec.scatter_forward()
 
                 out.store(u_vec, t)
                 u_old.x.array[:] = u_vec.array[:]
                 u_old.x.scatter_forward()
-
-                A.destroy()
-                b.destroy()
         else:
             # Nonlinear Newton inline (one step at a time)
             u = dlx.fem.Function(self.Vh[STATE])
@@ -256,9 +318,11 @@ class TimeDependentPDEVariationalProblem:
             A_form = dlx.fem.form(adj_form)
             B_form = dlx.fem.form(b_form_ufl)
 
-            Aadj = dolfinx.fem.petsc.assemble_matrix(A_form, bcs=self.adj_bc)
-            Aadj.assemble()
-            b = dolfinx.fem.petsc.assemble_vector(B_form)
+            self._A_adj = self._assemble_reuse(
+                self._A_adj, A_form, self.adj_bc, self.solverAadj
+            )
+            self._b_adj = self._assemble_vec_reuse(self._b_adj, B_form)
+            b = self._b_adj
             dolfinx.fem.petsc.apply_lifting(b, [A_form], [self.adj_bc])
             b.ghostUpdate(PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE)
             dolfinx.fem.petsc.set_bc(b, self.adj_bc)
@@ -267,16 +331,12 @@ class TimeDependentPDEVariationalProblem:
             rhs_t = adj_rhs.view(t)
             b.axpy(1.0, rhs_t.petsc_vec)
 
-            self.solverAadj.setOperators(Aadj)
             self.solverAadj.solve(b, p_vec.petsc_vec)
             p_vec.scatter_forward()
             out.store(p_vec, t)
 
             p_old.x.array[:] = p_vec.array[:]
             p_old.x.scatter_forward()
-
-            Aadj.destroy()
-            b.destroy()
 
     # ---- gradient w.r.t. parameter ------------------------------------
     def evalGradientParameter(self, x: list, out: dlx.la.Vector) -> None:
@@ -349,9 +409,11 @@ class TimeDependentPDEVariationalProblem:
             A_form = dlx.fem.form(Ainc_form_ufl)
             B_form = dlx.fem.form(binc_form_ufl)
 
-            Ainc = dolfinx.fem.petsc.assemble_matrix(A_form, bcs=self.adj_bc)
-            Ainc.assemble()
-            b = dolfinx.fem.petsc.assemble_vector(B_form)
+            self._A_finc = self._assemble_reuse(
+                self._A_finc, A_form, self.adj_bc, self.solver_fwd_inc
+            )
+            self._b_finc = self._assemble_vec_reuse(self._b_finc, B_form)
+            b = self._b_finc
             dolfinx.fem.petsc.apply_lifting(b, [A_form], [self.adj_bc])
             b.ghostUpdate(PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE)
             dolfinx.fem.petsc.set_bc(b, self.adj_bc)
@@ -360,7 +422,6 @@ class TimeDependentPDEVariationalProblem:
             rhs_t = rhs.view(t)
             b.axpy(1.0, rhs_t.petsc_vec)
 
-            self.solver_fwd_inc.setOperators(Ainc)
             self.solver_fwd_inc.solve(b, uhat_vec.petsc_vec)
             uhat_vec.scatter_forward()
 
@@ -371,9 +432,6 @@ class TimeDependentPDEVariationalProblem:
             self.linearize_x[STATE].retrieve(u_old.x, t)
 
             out.store(uhat_vec, t)
-
-            Ainc.destroy()
-            b.destroy()
 
     # ---- incremental adjoint ------------------------------------------
     def _solveIncrementalAdj(
@@ -424,9 +482,11 @@ class TimeDependentPDEVariationalProblem:
             A_form = dlx.fem.form(A_adj_form_ufl)
             B_form = dlx.fem.form(b_adj_form_ufl)
 
-            Aadj = dolfinx.fem.petsc.assemble_matrix(A_form, bcs=self.adj_bc)
-            Aadj.assemble()
-            b = dolfinx.fem.petsc.assemble_vector(B_form)
+            self._A_ainc = self._assemble_reuse(
+                self._A_ainc, A_form, self.adj_bc, self.solver_adj_inc
+            )
+            self._b_ainc = self._assemble_vec_reuse(self._b_ainc, B_form)
+            b = self._b_ainc
             dolfinx.fem.petsc.apply_lifting(b, [A_form], [self.adj_bc])
             b.ghostUpdate(PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE)
             dolfinx.fem.petsc.set_bc(b, self.adj_bc)
@@ -434,7 +494,6 @@ class TimeDependentPDEVariationalProblem:
             rhs_t = rhs.view(t)
             b.axpy(1.0, rhs_t.petsc_vec)
 
-            self.solver_adj_inc.setOperators(Aadj)
             self.solver_adj_inc.solve(b, phat_vec.petsc_vec)
             phat_vec.scatter_forward()
 
@@ -442,9 +501,6 @@ class TimeDependentPDEVariationalProblem:
             phat_old.x.scatter_forward()
 
             out.store(phat_vec, t)
-
-            Aadj.destroy()
-            b.destroy()
 
     def solveIncremental(
         self, out: TimeDependentVector, rhs: TimeDependentVector, is_adj: bool

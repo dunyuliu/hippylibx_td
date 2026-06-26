@@ -39,6 +39,82 @@ from __future__ import annotations
 import numpy as np
 import dolfinx as dlx
 import petsc4py
+from petsc4py import PETSc
+
+
+# ---------------------------------------------------------------------------
+# Communicator-sharing snapshot storage
+# ---------------------------------------------------------------------------
+# DOLFINx builds a *fresh* neighbour communicator (MPI_Dist_graph_create_adjacent)
+# for every `dolfinx.la.Vector` at construction.  A TimeDependentVector holds one
+# snapshot per time frame (nt+1 vectors), and an inversion keeps several
+# TimeDependentVectors alive at once, so nt × (#TDVs) neighbour comms quickly
+# exhaust MPICH's hard 2048-context limit under MPI (np>1) — the run aborts with
+# "Too many communicators".  PETSc's Vec.duplicate(), by contrast, *shares* the
+# parent's communicator (PetscCommDuplicate ref-counting), so we back every
+# snapshot with a ghosted PETSc Vec duplicated from a single per-TDV template.
+# This yields exactly ONE neighbour comm per TimeDependentVector regardless of nt.
+#
+# `_DupVector` mirrors the small slice of the `dolfinx.la.Vector` API that the
+# TD code touches: `.array` (full [owned|ghost] numpy view, read+write),
+# `.scatter_forward()`, and `.petsc_vec`.  Numerics are bit-identical to a real
+# la.Vector (verified: full-array equality after scatter, identical petsc dot).
+
+
+class _LocalArrayProxy:
+    """numpy-like view over a ghosted PETSc Vec's full [owned|ghost] local form.
+
+    Reproduces `dolfinx.la.Vector.array` semantics (length = size_local +
+    num_ghosts) so that ``v.array[:] = ...``, ``np.asarray(v.array)``,
+    ``v.array.shape[0]`` and in-place ops behave exactly as before.
+    """
+
+    __slots__ = ("_pv",)
+
+    def __init__(self, pv: "PETSc.Vec"):
+        self._pv = pv
+
+    def __array__(self, dtype=None):
+        with self._pv.localForm() as lf:
+            a = np.array(lf.array, copy=True)
+        return a if dtype is None else a.astype(dtype)
+
+    @property
+    def shape(self):
+        with self._pv.localForm() as lf:
+            return lf.array.shape
+
+    def __len__(self) -> int:
+        with self._pv.localForm() as lf:
+            return int(lf.array.shape[0])
+
+    def __getitem__(self, key):
+        with self._pv.localForm() as lf:
+            return np.array(lf.array[key], copy=True)
+
+    def __setitem__(self, key, value) -> None:
+        with self._pv.localForm() as lf:
+            lf.array[key] = value
+
+
+class _DupVector:
+    """la.Vector-compatible snapshot backed by a comm-sharing ghosted PETSc Vec."""
+
+    __slots__ = ("petsc_vec", "_arr")
+
+    def __init__(self, template_pv: "PETSc.Vec"):
+        self.petsc_vec = template_pv.duplicate()   # shares neighbour comm
+        self.petsc_vec.set(0.0)
+        self._arr = _LocalArrayProxy(self.petsc_vec)
+
+    @property
+    def array(self) -> _LocalArrayProxy:
+        return self._arr
+
+    def scatter_forward(self) -> None:
+        self.petsc_vec.ghostUpdate(
+            PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD
+        )
 
 
 class _TDVArrayProxy:
@@ -125,23 +201,34 @@ class TimeDependentVector:
         self.nsteps = len(self.times)
         self.tol = tol
         self.Vh = None
-        self.data: list[dlx.la.Vector] = []
+        self._template = None      # one la.Vector per TDV; holds the shared comm
+        self.data: list[_DupVector] = []
 
     # ---- factories -----------------------------------------------------
     def initialize(self, Vh) -> None:
-        """Allocate snapshots compatible with the function space ``Vh``."""
+        """Allocate snapshots compatible with the function space ``Vh``.
+
+        All snapshots share a single neighbour communicator (see module note):
+        one template la.Vector is created, and every frame is a comm-sharing
+        PETSc duplicate of it.
+        """
         self.Vh = Vh
-        self.data = [
-            dlx.la.vector(Vh.dofmap.index_map, Vh.dofmap.index_map_bs)
-            for _ in range(self.nsteps)
-        ]
+        self._template = dlx.la.vector(
+            Vh.dofmap.index_map, Vh.dofmap.index_map_bs
+        )
+        tpv = self._template.petsc_vec
+        self.data = [_DupVector(tpv) for _ in range(self.nsteps)]
 
     def copy(self) -> "TimeDependentVector":
         res = TimeDependentVector(self.times, tol=self.tol)
         res.Vh = self.Vh
+        res._template = dlx.la.vector(
+            self.Vh.dofmap.index_map, self.Vh.dofmap.index_map_bs
+        )
+        tpv = res._template.petsc_vec
         res.data = []
         for v in self.data:
-            new_v = dlx.la.vector(self.Vh.dofmap.index_map, self.Vh.dofmap.index_map_bs)
+            new_v = _DupVector(tpv)
             new_v.array[:] = v.array[:]
             new_v.scatter_forward()
             res.data.append(new_v)

@@ -44,10 +44,30 @@ class NSReducedHessian:
         self.phat = model.generate_vector(ADJOINT)
         self.yhelp = model.generate_vector(PARAMETER)
 
-        # PETSc python-mat wrapper so we can plug into CGSolverSteihaug
-        m = model.generate_vector(PARAMETER)
+        # PETSc python-mat wrapper so we can plug into CGSolverSteihaug.
+        #
+        # MPI-size fix: we must NOT use m.petsc_vec.getSizes() here.
+        # A dolfinx la.Vector's petsc_vec is the ghosted local vector;
+        # its getSizes() returns (local_owned, local_owned) — no global
+        # info — so createPython would infer global = local (e.g. 2568
+        # instead of 10045 at np=4), making createVecLeft() too small.
+        #
+        # The correct source is an assembled PETSc Mat on the parameter
+        # space: its getSizes() returns ((n_local, N_global), (n_local,
+        # N_global)) which createPython propagates correctly.  Mirror the
+        # working ReducedHessian (modeling/reducedHessian.py:49) which
+        # uses self.model.prior.M.getSizes().
+        if model.nsprior is not None:
+            _ref_mat = model.nsprior.M   # assembled CG1 mass matrix
+        elif model.prior is not None:
+            _ref_mat = model.prior.M
+        else:
+            raise ValueError(
+                "NSReducedHessian: model has neither nsprior nor prior; "
+                "cannot determine parameter-space sizes."
+            )
         self.petsc_wrapper = PETSc.Mat().createPython(
-            m.petsc_vec.getSizes(), comm=m.petsc_vec.getComm()
+            _ref_mat.getSizes(), comm=_ref_mat.getComm()
         )
         self.petsc_wrapper.setPythonContext(self)
         self.petsc_wrapper.setUp()
