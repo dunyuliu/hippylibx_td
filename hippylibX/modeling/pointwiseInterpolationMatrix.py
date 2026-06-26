@@ -1,5 +1,6 @@
 import numpy as np
 from petsc4py import PETSc
+from mpi4py import MPI
 
 from dolfinx import fem, geometry
 
@@ -14,19 +15,47 @@ def findPoints(mesh, x):
     candidate_cells = geometry.compute_collisions_points(bb_tree, x)
     colliding_cells = geometry.compute_colliding_cells(mesh, candidate_cells, x)
 
+    # Under MPI, compute_colliding_cells returns hits in ghost cells too, so a
+    # target near a partition boundary collides on >1 rank.  If we kept it on
+    # all of them, the PETSc row LGMap would route every rank's contribution
+    # (ADD_VALUES) into the SAME global row -> the interpolation matrix (and
+    # hence the observed data) double-counts boundary targets, making results
+    # depend on the partition / number of ranks.  To make B partition-
+    # independent, each target must be owned by EXACTLY one rank:
+    #   1. keep a target only if it collides with a cell this rank OWNS
+    #      (ghost cells excluded), and
+    #   2. break geometric ties (a point exactly on a shared facet between two
+    #      owned cells on different ranks) by assigning it to the lowest rank.
+    comm = mesh.comm
+    num_owned = mesh.topology.index_map(tdim).size_local
+
+    claim = np.full(x.shape[0], False)
+    owned_cell = np.full(x.shape[0], -1, dtype=np.int64)
+    for i in range(x.shape[0]):
+        for c in colliding_cells.links(i):
+            if c < num_owned:
+                claim[i] = True
+                owned_cell[i] = int(c)
+                break
+
+    # Reconcile ties: each target goes to the smallest rank that claims it.
+    rank = comm.rank
+    my_rank_or_big = np.where(claim, rank, np.iinfo(np.int32).max).astype(np.int32)
+    min_rank = np.empty_like(my_rank_or_big)
+    comm.Allreduce(my_rank_or_big, min_rank, op=MPI.MIN)
+
     local_points = []
     local_cells = []
     point_owner_rows = []
-
     for i in range(x.shape[0]):
-        cells = colliding_cells.links(i)
-
-        if len(cells) > 0:
+        if claim[i] and min_rank[i] == rank:
             local_points.append(x[i])
-            local_cells.append(cells[0])
+            local_cells.append(int(owned_cell[i]))
             point_owner_rows.append(i)
 
     local_points = np.array(local_points, dtype=np.float64)
+    if local_points.size == 0:
+        local_points = local_points.reshape(0, x.shape[1])
 
     return local_points, local_cells, point_owner_rows
 
