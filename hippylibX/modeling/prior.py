@@ -108,6 +108,9 @@ class SqrtPrecisionPDE_Prior:
         self.Vh = Vh
         self.sqrt_precision_varf_handler = sqrt_precision_varf_handler
 
+        # Match Xindi's dolfin prior solvers exactly: PETScKrylovSolver("cg", amg_method())
+        # with amg_method() = ml_amg -> fallback petsc_amg (== PETSc GAMG, i.e. pc_type "gamg"),
+        # rtol 1e-12, error_on_nonconvergence. Msolver = cg + jacobi, rtol 1e-12.
         self.petsc_options_M = {
             "ksp_type": "cg",
             "pc_type": "jacobi",
@@ -118,7 +121,7 @@ class SqrtPrecisionPDE_Prior:
         }
         self.petsc_options_A = {
             "ksp_type": "cg",
-            "pc_type": "hypre",
+            "pc_type": "gamg",
             "ksp_rtol": "1e-12",
             "ksp_max_it": "1000",
             "ksp_error_if_not_converged": "true",
