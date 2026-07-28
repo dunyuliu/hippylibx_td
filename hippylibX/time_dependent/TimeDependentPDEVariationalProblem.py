@@ -645,28 +645,49 @@ class TimeDependentPDEVariationalProblem:
         du_test = ufl.TestFunction(self.Vh[STATE])
         du_old_test = ufl.TestFunction(self.Vh[STATE])
 
-        self.linearize_x[STATE].retrieve(u_old.x, self.times[0])
-
         out_t = self.generate_static_state()
-        for t in self.times[1:]:
+        # Row t of Wum collects d2F/(dm du) from F_t AND d2F/(dm du_old) from
+        # F_{t+1} -- because u_t enters F_t as `u` and F_{t+1} as `u_old`.
+        # The second term must therefore be assembled at the NEXT step's
+        # linearization state (u_{t+1}, u_t, p_{t+1}); the whole form is
+        # contracted with the adjoint p, so evaluating it at (u_t, u_{t-1}, p_t)
+        # instead shifts every row by one timestep. The last row gets no
+        # look-ahead term (there is no F_{N+1}). Mirrors the reference
+        # implementation (pde/time_dependent_variational_problem.py:636-671).
+        for it, t in enumerate(self.times[1:]):
+            t_index = it + 1
+
+            # past-to-current step: F_t at (u_t, u_{t-1}, p_t), d/du
+            t_old = self.times[t_index - 1]
             self.linearize_x[STATE].retrieve(u.x, t)
+            self.linearize_x[STATE].retrieve(u_old.x, t_old)
             self.linearize_x[ADJOINT].retrieve(p.x, t)
 
             form = self.varf(u, u_old, m, p, t)
-            varf = ufl.derivative(
-                ufl.derivative(form, m, dm_fun), u, du_test
-            ) + ufl.derivative(
-                ufl.derivative(form, m, dm_fun), u_old, du_old_test
-            )
+            varf = ufl.derivative(ufl.derivative(form, m, dm_fun), u, du_test)
 
             out_t.array[:] = 0.0
             dolfinx.fem.petsc.assemble_vector(out_t.petsc_vec, dlx.fem.form(varf))
+
+            if t_index < len(self.times) - 1:
+                # current-to-next step: F_{t+1} at (u_{t+1}, u_t, p_{t+1}), d/du_old
+                t_next = self.times[t_index + 1]
+                self.linearize_x[STATE].retrieve(u.x, t_next)
+                self.linearize_x[STATE].retrieve(u_old.x, t)
+                self.linearize_x[ADJOINT].retrieve(p.x, t_next)
+
+                form = self.varf(u, u_old, m, p, t)
+                varf = ufl.derivative(
+                    ufl.derivative(form, m, dm_fun), u_old, du_old_test
+                )
+                # assemble_vector accumulates into out_t
+                dolfinx.fem.petsc.assemble_vector(out_t.petsc_vec, dlx.fem.form(varf))
+
             out_t.petsc_vec.ghostUpdate(
                 PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE
             )
             self._bc_zero_rows_on_petsc(out_t.petsc_vec)
 
-            self.linearize_x[STATE].retrieve(u_old.x, t)
             out.store(out_t, t)
 
     def applyWmu(self, du: TimeDependentVector, out: dlx.la.Vector) -> None:
