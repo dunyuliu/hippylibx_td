@@ -26,8 +26,46 @@ def LS_ParameterList():
         10,
         "Maximum number of backtracking iterations",
     ]
+    parameters["linesearch_type"] = [
+        "backtrack",
+        "Step-length rule: 'backtrack' (alpha*=0.5, default/faithful) or "
+        "'interp' (safeguarded quadratic/cubic interpolation, Nocedal & Wright 3.5/3.6)",
+    ]
 
     return ParameterList(parameters)
+
+
+def _interp_step(phi0, dphi0, alpha1, phi_a1, alpha0_prev, phi_a0_prev):
+    """
+    Safeguarded polynomial step-length for the Armijo line search
+    (Nocedal & Wright, Alg. 3.5/3.6). Given phi(0)=phi0, phi'(0)=dphi0 (<0 for a
+    descent direction), and the failed trial phi(alpha1)=phi_a1 -- plus optionally
+    the previous failed trial (alpha0_prev, phi_a0_prev) -- return the next trial
+    alpha. Quadratic on the first backtrack, cubic afterwards. The result is
+    clamped to [0.1*alpha1, 0.5*alpha1], so it never decreases slower than plain
+    halving (worst case) but typically reaches an acceptable step in 1-2 tries.
+    """
+    if alpha0_prev is None:
+        denom = 2.0 * (phi_a1 - phi0 - dphi0 * alpha1)
+        alpha_next = 0.5 * alpha1 if denom <= 0.0 else (-dphi0 * alpha1 * alpha1 / denom)
+    else:
+        a0, a1 = alpha0_prev, alpha1
+        f0 = phi_a0_prev - phi0 - dphi0 * a0
+        f1 = phi_a1 - phi0 - dphi0 * a1
+        d = a0 * a0 * a1 * a1 * (a1 - a0)
+        if d == 0.0:
+            alpha_next = 0.5 * a1
+        else:
+            a = (a0 * a0 * f1 - a1 * a1 * f0) / d
+            b = (-a0 * a0 * a0 * f1 + a1 * a1 * a1 * f0) / d
+            if abs(a) < 1e-300:
+                alpha_next = (-dphi0 / (2.0 * b)) if b != 0.0 else 0.5 * a1
+            else:
+                disc = b * b - 3.0 * a * dphi0
+                alpha_next = 0.5 * a1 if disc < 0.0 else (-b + math.sqrt(disc)) / (3.0 * a)
+    if not (alpha_next == alpha_next):  # NaN guard
+        alpha_next = 0.5 * alpha1
+    return min(max(alpha_next, 0.1 * alpha1), 0.5 * alpha1)
 
 
 def TR_ParameterList():
@@ -189,6 +227,7 @@ class ReducedSpaceNewtonCG:
 
         c_armijo = self.parameters["LS"]["c_armijo"]
         max_backtracking_iter = self.parameters["LS"]["max_backtracking_iter"]
+        linesearch_type = self.parameters["LS"]["linesearch_type"]
 
         self.model.solveFwd(x[STATE], x)
         self.it = 0
@@ -243,6 +282,10 @@ class ReducedSpaceNewtonCG:
 
             mg_mhat = inner(mg, mhat)
 
+            # interpolation history (only used when linesearch_type == "interp")
+            ls_prev_alpha = None
+            ls_prev_phi = None
+
             while descent == 0 and n_backtrack < max_backtracking_iter:
                 x_star[PARAMETER].array[:] = x[PARAMETER].array + alpha * mhat.array
 
@@ -261,7 +304,15 @@ class ReducedSpaceNewtonCG:
                     x[STATE].array[:] = x_star[STATE].array
                 else:
                     n_backtrack += 1
-                    alpha *= 0.5
+                    if linesearch_type == "interp":
+                        alpha_next = _interp_step(
+                            cost_old, mg_mhat, alpha, cost_new,
+                            ls_prev_alpha, ls_prev_phi,
+                        )
+                        ls_prev_alpha, ls_prev_phi = alpha, cost_new
+                        alpha = alpha_next
+                    else:
+                        alpha *= 0.5
             if (print_level >= 0) and (self.it == 1):
                 print(
                     "\n{0:3} {1:3} {2:15} {3:15} {4:15} {5:15} {6:14} {7:14} {8:14}".format(
