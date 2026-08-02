@@ -8,6 +8,7 @@
 # --------------------------------------------------------------------------ec-
 
 import math
+from mpi4py import MPI   # line-search trial-failure allreduce
 from ..utils.parameterList import ParameterList
 from ..modeling.reducedHessian import ReducedHessian
 from ..modeling.variables import STATE, PARAMETER, ADJOINT
@@ -291,9 +292,39 @@ class ReducedSpaceNewtonCG:
 
                 x_star[STATE].array[:] = x[STATE].array
 
-                self.model.solveFwd(x_star[STATE], x_star)
+                # A trial point whose forward solve FAILS is an infeasible step, not a
+                # fatal error. The line search already rejects a trial point that fails
+                # Armijo; one that will not solve must be rejected the same way. Letting
+                # the solver's exception escape kills the entire inversion and discards
+                # every completed iteration -- measured: 2 of 3 runs died exactly this
+                # way (work/2d_exp032 at it9, work/2d_exp036 at it25, the latter losing
+                # 24 good iterations) when a full-Newton trial step drove A(m) singular
+                # and MUMPS returned KSP_DIVERGED_PC_FAILED.
+                #
+                # Exhausting the backtracks is already handled below (reason = 2), which
+                # terminates cleanly and KEEPS the completed iterations -- so routing a
+                # failed trial into that path is all this needs to do.
+                try:
+                    self.model.solveFwd(x_star[STATE], x_star)
+                    cost_new, reg_new, misfit_new = self.model.cost(x_star)
+                    trial_ok, trial_err = 1, None
+                except RuntimeError as err:
+                    trial_ok, trial_err = 0, err
+                # Collective: every rank must take the same branch, or the next
+                # collective call deadlocks on the ranks that did not raise.
+                _comm = self.model.prior.Vh.mesh.comm
+                trial_ok = _comm.allreduce(trial_ok, op=MPI.MIN)
+                if not trial_ok:
+                    n_backtrack += 1
+                    alpha *= 0.5   # NOT the interp rule: it needs a valid cost_new
+                    if print_level >= 0 and _comm.rank == 0:
+                        print(
+                            f"  [line search] trial solve failed at alpha="
+                            f"{2.0 * alpha:.4e} -> step rejected, backtracking "
+                            f"({n_backtrack}/{max_backtracking_iter}). {trial_err}"
+                        )
+                    continue
 
-                cost_new, reg_new, misfit_new = self.model.cost(x_star)
                 # Check if armijo conditions are satisfied
                 if (cost_new < cost_old + alpha * c_armijo * mg_mhat) or (
                     -mg_mhat <= self.parameters["gdm_tolerance"]
