@@ -253,7 +253,16 @@ class ReducedSpaceNewtonCG:
             gradnorm = self.model.evalGradientParameter(x, mg)
 
             if self.it == 0:
-                gradnorm_ini = gradnorm
+                # gradnorm_ini anchors BOTH the convergence tolerance and the
+                # Eisenstat-Walker cg tolerance. On a warm start it would be taken
+                # from the SEED's gradient, so ||g||/||g0|| = 1 and tolcg clamps to
+                # cg_coarse_tolerance (0.5) instead of the ~0.13-0.19 an uninterrupted
+                # run would use -- every Newton system after a resume solved ~4x too
+                # loosely. A caller that resumes may pre-set `solver.gradnorm_ini` to
+                # the ORIGINAL run's value to keep the schedule continuous.
+                # See PATHWAY_FORWARD.md B3.
+                gradnorm_ini = getattr(self, "gradnorm_ini", None) or gradnorm
+                self.gradnorm_ini = gradnorm_ini
                 tol = max(abs_tol, gradnorm_ini * rel_tol)
 
             # check if solution is reached
@@ -430,7 +439,16 @@ class ReducedSpaceNewtonCG:
             gradnorm = self.model.evalGradientParameter(x, mg)
 
             if self.it == 0:
-                gradnorm_ini = gradnorm
+                # gradnorm_ini anchors BOTH the convergence tolerance and the
+                # Eisenstat-Walker cg tolerance. On a warm start it would be taken
+                # from the SEED's gradient, so ||g||/||g0|| = 1 and tolcg clamps to
+                # cg_coarse_tolerance (0.5) instead of the ~0.13-0.19 an uninterrupted
+                # run would use -- every Newton system after a resume solved ~4x too
+                # loosely. A caller that resumes may pre-set `solver.gradnorm_ini` to
+                # the ORIGINAL run's value to keep the schedule continuous.
+                # See PATHWAY_FORWARD.md B3.
+                gradnorm_ini = getattr(self, "gradnorm_ini", None) or gradnorm
+                self.gradnorm_ini = gradnorm_ini
                 tol = max(abs_tol, gradnorm_ini * rel_tol)
 
             # check if solution is reached
