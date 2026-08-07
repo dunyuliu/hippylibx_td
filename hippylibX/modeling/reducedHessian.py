@@ -52,8 +52,53 @@ class ReducedHessian:
         self.petsc_wrapper.setPythonContext(self)
         self.petsc_wrapper.setUp()
 
+    def destroy(self) -> None:
+        """Free the work vectors and the Python Mat wrapper held by this Hessian.
+
+        B5: `ReducedSpaceNewtonCG` builds a fresh ReducedHessian on EVERY Newton
+        iteration (NewtonCG.py:277). For a time-dependent problem `rhs_fwd`,
+        `rhs_adj`, `rhs_adj2`, `uhat` and `phat` are each a TimeDependentVector
+        holding `nsteps` PETSc Vecs, so without this each iteration leaked
+        ~5*nsteps Vecs -- measured at 500 Vecs and ~0.75 GB per iteration in 2D
+        with nsteps=100, which made a long 3D run OOM.
+
+        Call only once the CG solve using this operator has finished; the caller
+        owns the object and nothing else aliases these vectors.
+        """
+        for name in ("rhs_fwd", "rhs_adj", "rhs_adj2", "uhat", "phat", "yhelp"):
+            v = getattr(self, name, None)
+            if v is None:
+                continue
+            d = getattr(v, "destroy", None)          # TimeDependentVector
+            if callable(d):
+                try:
+                    d()
+                except Exception:
+                    pass
+            else:                                     # plain la.Vector
+                try:
+                    v.petsc_vec.destroy()
+                except Exception:
+                    pass
+            setattr(self, name, None)
+        w = getattr(self, "petsc_wrapper", None)
+        if w is not None:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+            self.petsc_wrapper = None
+
     def __del__(self):
-        self.petsc_wrapper.destroy()
+        # `destroy()` may already have run and set this to None (it is called
+        # explicitly at the end of each Newton iteration); __del__ still fires
+        # later at GC time, so it must tolerate an already-freed wrapper.
+        w = getattr(self, "petsc_wrapper", None)
+        if w is not None:
+            try:
+                w.destroy()
+            except Exception:
+                pass
 
     @property
     def mat(self) -> petsc4py.PETSc.Mat:

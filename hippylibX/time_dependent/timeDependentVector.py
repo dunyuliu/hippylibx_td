@@ -196,7 +196,31 @@ class TimeDependentVector:
     The list of valid time frames is fixed at construction.
     """
 
+    # B5 instrumentation: count TDV constructions and record WHERE from, so the
+    # leak site is measured rather than inferred. Two prior guesses (the
+    # factorization cache, then solveAdj's rhs) were both wrong.
+    _ve_count = 0
+    _ve_sites = {}
+
     def __init__(self, times, tol: float = 1e-10):
+        import os as _os
+        if _os.environ.get("VE_TDV_TRACE"):
+            import traceback as _tb
+            TimeDependentVector._ve_count += 1
+            # Walk out past this module and the generate_vector/generate_state
+            # wrappers to name the CALLER -- the wrapper body is not the leak site.
+            st = _tb.extract_stack()[:-1]
+            k = None
+            for fr in reversed(st):
+                bn = _os.path.basename(fr.filename)
+                if bn == "timeDependentVector.py":
+                    continue
+                if fr.name in ("generate_state", "generate_vector", "generate_parameter"):
+                    continue
+                k = f"{bn}:{fr.lineno} {fr.name}"
+                break
+            k = k or "unknown"
+            TimeDependentVector._ve_sites[k] = TimeDependentVector._ve_sites.get(k, 0) + 1
         self.times = list(times)
         self.nsteps = len(self.times)
         self.tol = tol
@@ -218,6 +242,34 @@ class TimeDependentVector:
         )
         tpv = self._template.petsc_vec
         self.data = [_DupVector(tpv) for _ in range(self.nsteps)]
+
+    def destroy(self) -> None:
+        """Free the PETSc Vecs backing this TDV's snapshots.
+
+        PETSc objects are not deterministically collected by Python's GC, so a
+        TDV that goes out of scope leaks ``nsteps`` Vecs. Measured with
+        ``-log_view`` (2D, 6 Newton iterations): Vector 13453 created / 6762
+        destroyed, ~1115 leaked per iteration -- about 11 TDVs of 100 snapshots
+        each -- costing ~0.75 GB per Newton iteration.
+
+        ONLY call this on a TDV you own. Freeing one that another object still
+        aliases is worse than the leak, so this is deliberately NOT wired into
+        ``__del__``: callers opt in at sites where the TDV is provably local.
+
+        Idempotent, and safe on a TDV that was never ``initialize``d.
+        """
+        for v in self.data:
+            try:
+                v.petsc_vec.destroy()
+            except Exception:
+                pass  # already destroyed / never built -- never fatal
+        self.data = []
+        if self._template is not None:
+            try:
+                self._template.petsc_vec.destroy()
+            except Exception:
+                pass
+            self._template = None
 
     def copy(self) -> "TimeDependentVector":
         res = TimeDependentVector(self.times, tol=self.tol)

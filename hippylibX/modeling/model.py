@@ -135,6 +135,11 @@ class Model:
 
         rhs.array[:] *= -1.0
         self.problem.solveAdj(out, x, rhs)
+        # `rhs` is created and consumed entirely within this call -- it is never
+        # returned or stored, so nothing else can alias it and freeing it here is
+        # safe by construction. Without this it leaks nsteps PETSc Vecs on every
+        # Newton iteration (see TimeDependentVector.destroy for the measurement).
+        rhs.destroy()
 
     def evalGradientParameter(
         self, x: list, mg: dlx.la.Vector, misfit_only=False

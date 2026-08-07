@@ -385,6 +385,16 @@ class ReducedSpaceNewtonCG:
             if self.callback:
                 self.callback(self.it, x)
 
+            # B5: this iteration's Hessian and its CG solver are finished with.
+            # A fresh ReducedHessian is built every iteration (above), and for a
+            # time-dependent problem each of its 5 state/adjoint work vectors is
+            # a TimeDependentVector of `nsteps` PETSc Vecs. PETSc objects are not
+            # deterministically GC'd, so without this the loop leaked ~500 Vecs
+            # and ~0.75 GB per iteration (2D, nsteps=100) -- enough to OOM a long
+            # 3D run. Freed here rather than in __del__ so ownership stays explicit.
+            # NOTE: must come after the callback, which may still read the state.
+            HessApply.destroy()
+
             if n_backtrack == max_backtracking_iter:
                 self.converged = False
                 self.reason = 2
