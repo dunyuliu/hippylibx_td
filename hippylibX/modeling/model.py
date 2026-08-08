@@ -257,6 +257,14 @@ class Model:
             self.problem.apply_ij(STATE, STATE, du, tmp)
 
             out.array[:] += tmp.array
+            # B5b: full-Newton only, called once per CG iteration. For a
+            # time-dependent problem `tmp` is a TimeDependentVector of nsteps
+            # PETSc Vecs; local to this call, so freeing it is safe. Measured
+            # 3D np=8: RSS flat at 108 GB through the Gauss-Newton phase, then
+            # +25 GB/hr from it6 -- the first full-Newton iteration.
+            _d = getattr(tmp, "destroy", None)
+            if callable(_d):
+                _d()
 
     def applyWum(self, dm: dlx.la.Vector, out: dlx.la.Vector) -> None:
         """
@@ -278,6 +286,10 @@ class Model:
             tmp = self.generate_vector(STATE)
             self.misfit.apply_ij(STATE, PARAMETER, dm, tmp)
             out.array[:] += tmp.array
+            # B5b: same as applyWuu -- per-CG, full-Newton only, local.
+            _d = getattr(tmp, "destroy", None)
+            if callable(_d):
+                _d()
 
     def applyWmu(self, du: dlx.la.Vector, out: dlx.la.Vector) -> None:
         """
